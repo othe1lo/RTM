@@ -1,0 +1,36 @@
+TẠO TEMPLATE IMPORT JOB OPER THEM ASSEMBLY
+
+select t1.Company
+,t1.JobNum
+,t1.AssemblySeq
+
+,t3.OprSeq	
+,t3.OpCode	
+,t3.OpDesc
+,t3.ProdStandard	
+,t3.StdFormat	
+,t1.Plant
+
+from erp.JobAsmbl t1 
+	inner join erp.PartOpr t3 on t1.PartNum = t3.PartNum and t1.RevisionNum = t3.RevisionNum and t3.AltMethod =''
+where t1.plant='KTC' and t1.AssemblySeq >0 
+		and not exists  (select 1 from erp.JobOper  t2 where    t2.AssemblySeq >0 and t2.JobNum =t1.JobNum)
+
+--- TAO TEMPLATE IMPORT JOB MATERAL THEO ASSEMBLY : khong lay type M
+select t1.Company
+,t1.JobNum
+,t1.AssemblySeq
+
+,t3.MtlSeq	
+,t3.MtlPartNum	PartNum
+,t3.QtyPer
+,t3.UOMCode	 IUM
+,t1.Plant
+
+from erp.JobAsmbl t1 
+	inner join erp.PartMtl t3 on t1.PartNum = t3.PartNum and t1.RevisionNum = t3.RevisionNum and t3.AltMethod =''
+	inner join erp.part t4 on t4.PartNum = t3.MtlPartNum and t4.TypeCode ='P'
+where t1.plant='KTC' and t1.AssemblySeq >0 
+		and not exists  (select 1 from erp.JobMtl  t2 where    t2.AssemblySeq >0 and t2.JobNum =t1.JobNum)
+		order by t1.JobNum, t1.AssemblySeq, t3.MtlSeq
+		
