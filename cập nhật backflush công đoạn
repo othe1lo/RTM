@@ -1,0 +1,18 @@
+select  
+t1.Company
+,t2.JobNum
+,t1.AssemblySeq
+,t1.OprSeq	
+,t1.OpCode	
+,'B' LaborEntryMethod
+from erp.JobOper t1 
+ inner join erp.jobhead t2 on t1.JobNum = t2.JobNum and t2.Plant ='ktc'
+where t2.JobClosed = 0
+and t1.OpCode in (
+'KTCBCL',
+'KTCTD',
+'KTCST',
+'KTCBC',
+'KTCH'
+)
+and t2.partnum not in  ('706010','PLC091158','706016','706032')
