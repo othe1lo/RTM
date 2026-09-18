@@ -1,0 +1,20 @@
+select  
+t1.Company
+,t2.Plant
+,t2.Plant ECOGroupID
+,t2.PartNum
+,t1.RevisionNum
+,t1.OprSeq	
+,t1.OpCode	
+,'B' LaborEntryMethod
+from erp.PartOpr t1 
+ inner join erp.PartRev t2 on t1.PartNum = t2.PartNum and t2.Plant ='ktc' and t1.RevisionNum = t2.RevisionNum
+Where
+ t1.OpCode in (
+'KTCBCL',
+'KTCTD',
+'KTCST',
+'KTCBC',
+'KTCH'
+)
+and t2.partnum not in  ('706010','PLC091158','706016','706032')
