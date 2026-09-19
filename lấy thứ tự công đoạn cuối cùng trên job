@@ -1,0 +1,30 @@
+
+WITH RankedOperations AS (
+    SELECT 
+        Company,
+        JobNum,
+        AssemblySeq,
+        OprSeq,
+        OpCode,
+        OpDesc,
+        ROW_NUMBER() OVER (
+            PARTITION BY Company, JobNum, AssemblySeq 
+            ORDER BY OprSeq DESC
+        ) AS RowNum
+    FROM 
+        Erp.JobOper 
+    WHERE 
+        Company = 'YOUR_COMPANY_ID'
+        -- AND JobNum = 'YOUR_JOB_NUM' -- (Mở ghi chú nếu muốn lọc cụ thể 1 Job)
+)
+SELECT 
+    Company,
+    JobNum,
+    AssemblySeq,
+    OprSeq AS LastOprSeq,
+    OpCode,
+    OpDesc
+FROM 
+    RankedOperations
+WHERE 
+    RowNum = 1;
