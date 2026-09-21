@@ -1,0 +1,27 @@
+--select * from erp.JobAsmbl where partNum like '%FMKTC' and qtyper = 1 and plant ='ktc' and IUM = 'batch' and RequiredQty>0
+--select * from erp.PartUOM  where partNum like '%FMKTC' and UOMCode = 'batch'
+Select A.*
+,mtl.MtlSeq
+,mtl.MtlPartNum MtlPartNum
+,mtl.QtyPer
+,mtl.UOMCode
+From 
+(
+select t1.Company 
+,t1.JObnum
+,t2.AssemblySeq
+,t2.PartNum
+,t2.RevisionNum
+,count(t3.MtlSeq) XCOunt
+From erp.JobHead  t1
+ inner join erp.JobAsmbl t2 on t1.JobNum = t2.JobNum
+	left join erp.JobMtl t3 on t2.JobNum = t3.JobNum and t2.AssemblySeq = t3.AssemblySeq
+where t1.Plant ='ktc' and JobClosed =0 and (t2.PartNum  like '%-FMKTC' or t2.PartNum  like '%-XL')
+	group by
+	t1.Company 
+,t1.JObnum
+,t2.AssemblySeq
+,t2.PartNum
+,t2.RevisionNum
+having count(t3.MtlSeq) =0) A 
+	 inner join erp.PartMtl mtl on A.PartNum = mtl.PartNum and a.RevisionNum = mtl.RevisionNum 
