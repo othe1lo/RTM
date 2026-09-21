@@ -1,0 +1,179 @@
+
+   WITH JobDemandRaw AS (
+    SELECT 
+        jm.Company,
+        jm.JobNum,
+        jm.AssemblySeq,
+        jm.MtlSeq,
+        jm.PartNum,
+        jm.Description,
+        jh.Plant,
+        jm.RelatedOperation,
+        -- Thứ tự ưu tiên: Ngày bắt đầu của công đoạn, nếu không có lấy StartDate của Job
+        ISNULL(jo.StartDate, jh.StartDate) AS OperStartDate,
+        
+        -- Số lượng thành phẩm hoàn thành làm căn cứ tính nhu cầu:
+        -- Nếu RelatedOperation = 0 lấy JobHead.QtyCompleted, ngược lại lấy JobOper.QtyCompleted
+        CASE 
+            WHEN ISNULL(jm.RelatedOperation, 0) = 0 THEN ISNULL(jh.QtyCompleted, 0)
+            ELSE ISNULL(jo.QtyCompleted, 0)
+        END AS ApplicableQtyCompleted,
+        
+        -- Định mức NVL trên 1 đơn vị thành phẩm (theo JobMtl.UOMCode)
+        jm.QtyPer,
+        jm.IUM AS MtlUOM,
+        jm.BaseUOM AS BaseUOM,
+        
+        -- Hệ số quy đổi về Base UOM (Primary UOM)
+        ISNULL(uconv.ConvFactor, 1.0) AS FactorToBase,
+        
+        -- Số lượng đã thực xuất trước đó quy về Base UOM
+        (jm.IssuedQty * ISNULL(uconv.ConvFactor, 1.0)) AS IssuedBaseQty
+        
+        -- Kho & Bin mặc định của JobMtl hoặc PartPlant
+      , ISNULL(jm.WarehouseCode, '') TargetWhse
+      --  ISNULL(NULLIF(jm.BinNum, ''), ISNULL(pp.PrimBin, '')) AS TargetBin
+    FROM Erp.JobMtl jm WITH (NOLOCK)
+    INNER JOIN Erp.JobHead jh WITH (NOLOCK)
+        ON jm.Company = jh.Company 
+       AND jm.JobNum = jh.JobNum
+	   and jh.Plant ='ktc'
+	   and  jh.JobClosed = 0 
+      AND jh.JobReleased = 1
+    LEFT JOIN Erp.JobOper jo WITH (NOLOCK)
+        ON jm.Company = jo.Company 
+       AND jm.JobNum = jo.JobNum 
+       AND jm.AssemblySeq = jo.AssemblySeq 
+       AND jm.RelatedOperation = jo.OprSeq
+    INNER JOIN Erp.Part p WITH (NOLOCK)
+        ON jm.Company = p.Company 
+       AND jm.PartNum = p.PartNum
+   
+    -- Lấy hệ số quy đổi đơn vị tính (UOM Conversion) sang Base UOM
+    LEFT JOIN Erp.UOMConv uconv WITH (NOLOCK)
+        ON uconv.Company = jm.Company 
+       AND uconv.UOMClassID = p.UOMClassID 
+       AND uconv.UOMCode = jm.IUM
+    WHERE jh.JobClosed = 0 
+      AND jh.JobReleased = 1
+    --  AND p.TrackLots = 1 -- Giới hạn NVL quản lý theo Lot
+),
+JobDemandCalculated AS (
+    SELECT 
+        d.*,
+        -- Tổng nhu cầu theo sản lượng hoàn thành quy về Base UOM
+        (d.ApplicableQtyCompleted * d.QtyPer * d.FactorToBase) AS TotalRequiredBaseQty,
+        
+        -- Nhu cầu còn thiếu cần xuất kho
+        CASE 
+            WHEN (d.ApplicableQtyCompleted * d.QtyPer * d.FactorToBase) - d.IssuedBaseQty > 0 
+            THEN (d.ApplicableQtyCompleted * d.QtyPer * d.FactorToBase) - d.IssuedBaseQty
+            ELSE 0 
+        END AS NetRequiredBaseQty
+    FROM JobDemandRaw d
+),
+OrderedDemand AS (
+    -- Gán số thứ tự ưu tiên tiêu thụ theo ngày bắt đầu công đoạn
+    SELECT 
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY Company, Plant, PartNum 
+            ORDER BY OperStartDate ASC, JobNum ASC, AssemblySeq ASC, MtlSeq ASC
+        ) AS DemandRank,
+        -- Running Total nhu cầu lũy kế
+        SUM(NetRequiredBaseQty) OVER (
+            PARTITION BY Company, Plant, PartNum 
+            ORDER BY OperStartDate ASC, JobNum ASC, AssemblySeq ASC, MtlSeq ASC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS RunningRequiredEnd,
+        (SUM(NetRequiredBaseQty) OVER (
+            PARTITION BY Company, Plant, PartNum 
+            ORDER BY OperStartDate ASC, JobNum ASC, AssemblySeq ASC, MtlSeq ASC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) - NetRequiredBaseQty) AS RunningRequiredStart
+    FROM JobDemandCalculated
+    WHERE NetRequiredBaseQty > 0
+),
+AvailableLotInventory AS (
+    -- Tồn kho thực tế theo Lot, sắp xếp FirstRefDate tăng dần (FIFO)
+    SELECT 
+        pb.Company,
+        pw.Plant,
+        pb.PartNum,
+        pb.WarehouseCode,
+        pb.BinNum,
+        isnull(pb.LotNum,'')LotNum,
+       isnull (pl.FirstRefDate, getdate())FirstRefDate,
+        pb.OnhandQty AS LotOnhandQty,
+        -- Running Total tồn kho lũy kế
+        SUM(pb.OnhandQty) OVER (
+            PARTITION BY pb.Company, pw.Plant, pb.PartNum 
+            ORDER BY pl.FirstRefDate ASC, pb.LotNum ASC, pb.WarehouseCode ASC, pb.BinNum ASC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS RunningSupplyEnd,
+        (SUM(pb.OnhandQty) OVER (
+            PARTITION BY pb.Company, pw.Plant, pb.PartNum 
+            ORDER BY pl.FirstRefDate ASC, pb.LotNum ASC, pb.WarehouseCode ASC, pb.BinNum ASC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) - pb.OnhandQty) AS RunningSupplyStart
+    FROM Erp.PartBin pb WITH (NOLOCK)
+		inner join erp.Warehse pw with (nolock) on pb.WarehouseCode = pw.WarehouseCode and pw.plant ='ktc'
+    left join  Erp.PartLot pl WITH (NOLOCK)
+        ON pb.Company = pl.Company 
+       AND pb.PartNum = pl.PartNum 
+       AND pb.LotNum = pl.LotNum
+    WHERE pb.OnhandQty > 0
+),
+AllocatedOutput AS (
+    -- Giao thoa đoạn lũy kế để tìm lượng phân bổ (Overlap logic)
+    SELECT 
+        dem.Company,
+        dem.Plant,
+        dem.JobNum,
+        dem.AssemblySeq,
+        dem.MtlSeq,
+        dem.PartNum,
+        dem.BaseUOM,
+        dem.OperStartDate,
+        sup.WarehouseCode,
+        sup.BinNum,
+        sup.LotNum,
+        sup.FirstRefDate,
+        -- Số lượng phân bổ = Min(SupplyEnd, DemandEnd) - Max(SupplyStart, DemandStart)
+        CASE 
+            WHEN sup.RunningSupplyEnd < dem.RunningRequiredEnd THEN sup.RunningSupplyEnd 
+            ELSE dem.RunningRequiredEnd 
+        END 
+        - 
+        CASE 
+            WHEN sup.RunningSupplyStart > dem.RunningRequiredStart THEN sup.RunningSupplyStart 
+            ELSE dem.RunningRequiredStart 
+        END AS AllocQty
+    FROM OrderedDemand dem
+    INNER JOIN AvailableLotInventory sup
+        ON dem.Company = sup.Company
+       AND dem.Plant = sup.Plant
+       AND dem.PartNum = sup.PartNum
+       AND sup.RunningSupplyEnd > dem.RunningRequiredStart
+       AND sup.RunningSupplyStart < dem.RunningRequiredEnd
+)
+-- Format đúng chuẩn các cột của DMT "Issue Material"
+SELECT 
+    Company,
+    JobNum,
+    AssemblySeq,
+    MtlSeq,
+    PartNum,
+    CAST(AllocQty AS DECIMAL(18, 4)) AS TranQty,
+    BaseUOM AS UM,
+    WarehouseCode AS FromWarehouseCode,
+    BinNum AS FromBinNum,
+    LotNum AS FromLotNum,
+    CONVERT(VARCHAR(10), GETDATE(), 101) AS TranDate, -- Định dạng MM/dd/yyyy cho DMT
+    'DMT Issue Auto Allocated' AS TranReference,
+    Plant
+FROM AllocatedOutput
+WHERE AllocQty > 0
+ORDER BY partnum,JobNum, AssemblySeq, MtlSeq, FirstRefDate;
+
+
