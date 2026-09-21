@@ -160,15 +160,15 @@ AllocatedOutput AS (
 -- Format đúng chuẩn các cột của DMT "Issue Material"
 SELECT 
     Company,
-    JobNum,
-    AssemblySeq,
-    MtlSeq,
+    JobNum ToJobNum,
+    AssemblySeq ToAssemblySeq,
+    MtlSeq ToJobSeq,
     PartNum,
-    CAST(AllocQty AS DECIMAL(18, 4)) AS TranQty,
+    CAST(AllocQty AS DECIMAL(18, 8)) AS TranQty,
     BaseUOM AS UM,
     WarehouseCode AS FromWarehouseCode,
     BinNum AS FromBinNum,
-    LotNum AS FromLotNum,
+    LotNum AS LotNum,
     CONVERT(VARCHAR(10), GETDATE(), 101) AS TranDate, -- Định dạng MM/dd/yyyy cho DMT
     'DMT Issue Auto Allocated' AS TranReference,
     Plant
